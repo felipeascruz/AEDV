@@ -1,0 +1,1140 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Análise do Desempenho Olímpico e Características Socioeconômicas\n",
+    "\n",
+    "**Grupo:** Erick Souza Alberti, Felipe Augusto da Silva Cruz e Guilherme Henrique Pereira da Cunha"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Introdução\n",
+    "\n",
+    "Os Jogos Olímpicos são o maior evento esportivo do mundo e possuem grande relevância esportiva, sociocultural e de projeção internacional para os países participantes. O desempenho de cada país costuma ser resumido pelo número absoluto de medalhas, uma medida que pode dificultar comparações entre nações com populações, economias e estruturas esportivas muito diferentes.\n",
+    "\n",
+    "Neste trabalho, investigamos **possíveis relações entre o desempenho olímpico dos países e características socioeconômicas**, especialmente população total, Produto Interno Bruto (PIB) e PIB per capita. A análise se concentra nos **Jogos Olímpicos de Verão**.\n",
+    "\n",
+    "Como as fontes possuem coberturas temporais diferentes, serão utilizados dois recortes. Nas perguntas que dependem apenas dos dados olímpicos, serão consideradas todas as edições de Verão disponíveis, de **1896 a 2024**. Já nas perguntas que envolvem indicadores do World Bank, serão consideradas as edições de Verão entre **1960 e 2024**, período em que há sobreposição entre os dados olímpicos e os indicadores socioeconômicos utilizados.\n",
+    "\n",
+    "Ao longo do estudo, o desempenho será medido de formas complementares, como número total de medalhas, participação no total de medalhas de cada edição e medidas relativas, como medalhas por milhão de habitantes. As relações encontradas serão interpretadas como **associações**, e não como evidência de causalidade.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": "**Link do Repositório no GitHub:** https://github.com/felipeascruz/AEDV"
+  },
+  {
+   "metadata": {},
+   "cell_type": "markdown",
+   "source": [
+    "## Descrição dos Dados\n",
+    "\n",
+    "O trabalho utiliza três fontes: dois arquivos CSV com dados olímpicos e indicadores socioeconômicos obtidos pela API do World Bank.\n",
+    "\n",
+    "* **Medal Table:** contém o resultado agregado de cada país em cada edição dos Jogos Olímpicos de Verão e de Inverno, de 1896 a 2026. Cada linha corresponde a um país em uma edição ou subedição, e aparecem apenas países que conquistaram ao menos uma medalha. A base possui 1.929 linhas e 11 colunas. Como as medalhas de esportes coletivos são contabilizadas uma única vez, esta tabela será utilizada como fonte principal para o total oficial de medalhas. Em 1956, a subedição equestre de Estocolmo aparece separadamente da edição de Melbourne; por isso, os registros serão agregados por **ano e NOC** antes das análises.\n",
+    "\n",
+    "* **Olympic Athletes:** contém 315.094 registros de participação de atletas, com 16 colunas. Cada linha representa um atleta em um evento, de modo que um mesmo atleta pode aparecer diversas vezes. Esta base será usada principalmente para identificar **todos os países participantes em cada edição**, inclusive aqueles que conquistaram zero medalhas.\n",
+    "\n",
+    "* **World Bank (API):** fornece indicadores anuais por país. Serão utilizados população total, PIB em dólares correntes e PIB per capita em dólares correntes. O arquivo coletado possui dados entre 1960 e 2025; como a última edição de Verão disponível é 2024, as análises socioeconômicas utilizarão as edições entre **1960 e 2024**.\n",
+    "\n",
+    "### Combinação das bases\n",
+    "\n",
+    "A unidade principal de análise será **país × edição olímpica**. Primeiro, a lista de participantes será obtida da base de atletas. Em seguida, o quadro de medalhas será agregado por `year` e `noc` e combinado à lista de participantes com uma junção à esquerda. Países participantes que não aparecem no quadro de medalhas receberão valor zero para ouro, prata, bronze e total, evitando que países sem medalhas sejam excluídos das análises.\n",
+    "\n",
+    "Os códigos do World Bank seguem majoritariamente o padrão ISO, enquanto os dados olímpicos utilizam códigos NOC. Será feita uma padronização explícita dos identificadores antes da junção por `year + noc`. Casos históricos ou delegações sem correspondência socioeconômica defensável serão mantidos como dados ausentes, em vez de receberem uma correspondência arbitrária. Os valores ausentes de população, PIB e PIB per capita também **não serão removidos globalmente**: cada pergunta utilizará apenas as observações que possuírem os indicadores necessários para aquela análise.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2026-10-27T18:03:41.947429900Z",
+     "start_time": "2026-10-27T18:02:31.863198600Z"
+    }
+   },
+   "source": [
+    "# Coleta dos indicadores socioeconômicos do World Bank\n",
+    "import wbgapi as wb\n",
+    "\n",
+    "# Códigos oficiais das variáveis de interesse:\n",
+    "# SP.POP.TOTL: População total\n",
+    "# NY.GDP.MKTP.CD: PIB (US$ correntes)\n",
+    "# NY.GDP.PCAP.CD: PIB per capita (US$ correntes)\n",
+    "indicadores_wb = {\n",
+    "    'SP.POP.TOTL': 'population',\n",
+    "    'NY.GDP.MKTP.CD': 'gdp',\n",
+    "    'NY.GDP.PCAP.CD': 'gdp_per_capita'\n",
+    "}\n",
+    "\n",
+    "# Os indicadores utilizados possuem cobertura no arquivo a partir de 1960.\n",
+    "# A coleta vai até 2025, embora as análises olímpicas terminem em 2024.\n",
+    "df_world_bank = wb.data.DataFrame(\n",
+    "    indicadores_wb.keys(),\n",
+    "    time=range(1960, 2026),\n",
+    "    labels=True,\n",
+    "    numericTimeKeys=True\n",
+    ").reset_index()\n",
+    "\n",
+    "# Salva o CSV sem o índice numérico para evitar uma coluna extra na leitura posterior.\n",
+    "df_world_bank.to_csv('world_bank.csv', index=False)\n"
+   ],
+   "outputs": []
+  },
+  {
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2026-10-27T19:10:17.226946600Z",
+     "start_time": "2026-10-27T19:10:16.804320900Z"
+    }
+   },
+   "cell_type": "code",
+   "source": [
+    "# Importação, limpeza e combinação das bases\n",
+    "import pandas as pd\n",
+    "from IPython.display import display\n",
+    "\n",
+    "df_medalhas = pd.read_csv('medal_table.csv')\n",
+    "df_atletas = pd.read_csv('olympic_athletes.csv')\n",
+    "df_world_bank = pd.read_csv('world_bank.csv')\n",
+    "\n",
+    "# -----------------------------\n",
+    "# 1. Preparação do World Bank\n",
+    "# -----------------------------\n",
+    "\n",
+    "# Transforma as colunas de anos em uma única coluna 'year'.\n",
+    "df_world_bank = df_world_bank.melt(\n",
+    "    id_vars=['economy', 'series', 'Country', 'Series'],\n",
+    "    var_name='year',\n",
+    "    value_name='valor'\n",
+    ")\n",
+    "\n",
+    "# Pivota a tabela para que população, PIB e PIB per capita tenham colunas próprias.\n",
+    "df_world_bank = df_world_bank.pivot_table(\n",
+    "    index=['economy', 'Country', 'year'],\n",
+    "    columns='series',\n",
+    "    values='valor'\n",
+    ").reset_index()\n",
+    "\n",
+    "df_world_bank['year'] = df_world_bank['year'].astype(int)\n",
+    "df_world_bank = df_world_bank.rename(columns=indicadores_wb)\n",
+    "df_world_bank = df_world_bank.rename(columns={'economy': 'iso', 'Country': 'country'})\n",
+    "\n",
+    "# O código CHI do World Bank corresponde a Channel Islands e conflita com o NOC CHI do Chile.\n",
+    "# Channel Islands não compete como um NOC próprio, então esse registro é removido antes da conversão.\n",
+    "df_world_bank = df_world_bank[df_world_bank['iso'] != 'CHI'].copy()\n",
+    "\n",
+    "# Conversão dos códigos ISO do World Bank para os códigos NOC utilizados na base olímpica.\n",
+    "iso_para_noc = {\n",
+    "    'DZA': 'ALG', 'AGO': 'ANG', 'ATG': 'ANT', 'ABW': 'ARU', 'ASM': 'ASA', 'BHS': 'BAH', 'BGD': 'BAN', 'BRB': 'BAR',\n",
+    "    'BMU': 'BER', 'BTN': 'BHU', 'BLZ': 'BIZ', 'BWA': 'BOT', 'BHR': 'BRN', 'BRN': 'BRU', 'BGR': 'BUL', 'BFA': 'BUR',\n",
+    "    'KHM': 'CAM', 'CYM': 'CAY', 'COG': 'CGO', 'TCD': 'CHA', 'CHL': 'CHI', 'CRI': 'CRC', 'HRV': 'CRO', 'DNK': 'DEN',\n",
+    "    'SLV': 'ESA', 'FJI': 'FIJ', 'GMB': 'GAM', 'GNB': 'GBS', 'GNQ': 'GEQ', 'DEU': 'GER', 'GRC': 'GRE', 'GRD': 'GRN',\n",
+    "    'GTM': 'GUA', 'GIN': 'GUI', 'HTI': 'HAI', 'HND': 'HON', 'IDN': 'INA', 'IRN': 'IRI', 'VIR': 'ISV', 'VGB': 'IVB',\n",
+    "    'XKX': 'KOS', 'SAU': 'KSA', 'KWT': 'KUW', 'LVA': 'LAT', 'LBY': 'LBA', 'LSO': 'LES', 'MDG': 'MAD', 'MYS': 'MAS',\n",
+    "    'MWI': 'MAW', 'MNG': 'MGL', 'MCO': 'MON', 'MUS': 'MRI', 'MRT': 'MTN', 'MMR': 'MYA', 'NIC': 'NCA', 'NLD': 'NED',\n",
+    "    'NPL': 'NEP', 'NGA': 'NGR', 'NER': 'NIG', 'OMN': 'OMA', 'PRY': 'PAR', 'PHL': 'PHI', 'PSE': 'PLE', 'PRT': 'POR',\n",
+    "    'PRI': 'PUR', 'ZAF': 'RSA', 'WSM': 'SAM', 'SYC': 'SEY', 'KNA': 'SKN', 'SVN': 'SLO', 'SLB': 'SOL', 'LKA': 'SRI',\n",
+    "    'SDN': 'SUD', 'CHE': 'SUI', 'TZA': 'TAN', 'TON': 'TGA', 'TGO': 'TOG', 'ARE': 'UAE', 'URY': 'URU', 'VUT': 'VAN',\n",
+    "    'VNM': 'VIE', 'VCT': 'VIN', 'ZMB': 'ZAM', 'ZWE': 'ZIM'\n",
+    "}\n",
+    "\n",
+    "df_world_bank['noc'] = df_world_bank['iso'].replace(iso_para_noc)\n",
+    "\n",
+    "# O código olímpico do Líbano mudou na própria base: LIB até 2016 e LBN a partir de 2020.\n",
+    "df_world_bank.loc[(df_world_bank['iso'] == 'LBN') & (df_world_bank['year'] <= 2016), 'noc'] = 'LIB'\n",
+    "df_world_bank.loc[(df_world_bank['iso'] == 'LBN') & (df_world_bank['year'] >= 2020), 'noc'] = 'LBN'\n",
+    "\n",
+    "# -----------------------------\n",
+    "# 2. Preparação das bases olímpicas\n",
+    "# -----------------------------\n",
+    "\n",
+    "# Padronizações que possuem correspondência direta para o objetivo do trabalho.\n",
+    "# A Equipe Unificada (EUN), por exemplo, não é convertida para um país específico.\n",
+    "correcoes_olimpicas = {\n",
+    "    'ROC': 'RUS',  # Comitê Olímpico Russo -> Rússia\n",
+    "    'OAR': 'RUS'   # Atletas Olímpicos da Rússia -> Rússia (relevante apenas em edições de Inverno)\n",
+    "}\n",
+    "\n",
+    "df_medalhas['noc'] = df_medalhas['noc'].replace(correcoes_olimpicas)\n",
+    "df_atletas['noc'] = df_atletas['noc'].replace(correcoes_olimpicas)\n",
+    "\n",
+    "# O projeto analisa apenas os Jogos Olímpicos de Verão.\n",
+    "df_medalhas = df_medalhas[df_medalhas['season'] == 'Summer'].copy()\n",
+    "df_atletas = df_atletas[df_atletas['season'] == 'Summer'].copy()\n",
+    "\n",
+    "# Em 1956, Melbourne e a subedição equestre de Estocolmo aparecem separadamente.\n",
+    "# Somamos os registros para obter uma única observação país × edição.\n",
+    "df_medalhas_pais_edicao = (\n",
+    "    df_medalhas\n",
+    "    .groupby(['year', 'noc'], as_index=False)\n",
+    "    .agg(\n",
+    "        country=('country', 'first'),\n",
+    "        gold=('gold', 'sum'),\n",
+    "        silver=('silver', 'sum'),\n",
+    "        bronze=('bronze', 'sum'),\n",
+    "        total=('total', 'sum')\n",
+    "    )\n",
+    ")\n",
+    "\n",
+    "# A base de atletas define quem participou de cada edição, inclusive países sem medalhas.\n",
+    "df_participantes = df_atletas[['year', 'noc']].drop_duplicates()\n",
+    "\n",
+    "# Left join: todos os participantes são mantidos.\n",
+    "df_olimpico = df_participantes.merge(\n",
+    "    df_medalhas_pais_edicao,\n",
+    "    on=['year', 'noc'],\n",
+    "    how='left',\n",
+    "    validate='one_to_one'\n",
+    ")\n",
+    "\n",
+    "# Ausência no quadro de medalhas significa participação com zero medalhas, não dado ausente.\n",
+    "colunas_medalhas = ['gold', 'silver', 'bronze', 'total']\n",
+    "df_olimpico[colunas_medalhas] = df_olimpico[colunas_medalhas].fillna(0).astype(int)\n",
+    "\n",
+    "# -----------------------------\n",
+    "# 3. Integração com o World Bank\n",
+    "# -----------------------------\n",
+    "\n",
+    "df_pais_edicao = df_olimpico.merge(\n",
+    "    df_world_bank,\n",
+    "    on=['year', 'noc'],\n",
+    "    how='left',\n",
+    "    suffixes=('_olimpico', '_wb'),\n",
+    "    validate='one_to_one'\n",
+    ")\n",
+    "\n",
+    "# Nome do país para visualizações: prioriza o nome olímpico, depois o World Bank e, por fim, o NOC.\n",
+    "df_pais_edicao['country'] = (\n",
+    "    df_pais_edicao['country_olimpico']\n",
+    "    .fillna(df_pais_edicao['country_wb'])\n",
+    "    .fillna(df_pais_edicao['noc'])\n",
+    ")\n",
+    "\n",
+    "# Recortes que serão usados nas perguntas.\n",
+    "df_olimpico_completo = df_pais_edicao.copy()  # 1896–2024: perguntas apenas olímpicas\n",
+    "\n",
+    "df_socioeconomico = df_pais_edicao[\n",
+    "    df_pais_edicao['year'].between(1960, 2024)\n",
+    "].copy()  # 1960–2024: perguntas que usam World Bank\n",
+    "\n",
+    "# Não removemos NaNs socioeconômicos aqui. Cada pergunta filtra apenas o indicador de que precisa.\n",
+    "\n",
+    "print(\n",
+    "    f\"Período olímpico (Verão): {df_olimpico_completo['year'].min()}–{df_olimpico_completo['year'].max()} | \"\n",
+    "    f\"{len(df_olimpico_completo)} observações país × edição\"\n",
+    ")\n",
+    "print(\n",
+    "    f\"Período para análises socioeconômicas: {df_socioeconomico['year'].min()}–{df_socioeconomico['year'].max()} | \"\n",
+    "    f\"{len(df_socioeconomico)} observações país × edição\"\n",
+    ")\n",
+    "\n",
+    "# Auditoria simples da disponibilidade dos indicadores no recorte socioeconômico.\n",
+    "display(df_socioeconomico[['population', 'gdp', 'gdp_per_capita']].isna().sum().rename('valores_ausentes'))\n"
+   ],
+   "outputs": [],
+   "execution_count": null
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 1. Como o desempenho olímpico dos países, medido pelo número de medalhas conquistadas, varia entre as diferentes edições dos Jogos analisadas?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados**\n",
+    "\n",
+    "Como esta pergunta utiliza apenas informações olímpicas, foram consideradas todas as edições dos Jogos de Verão presentes na base, entre 1896 e 2024. Cada observação corresponde a um país participante em determinada edição.\n",
+    "\n",
+    "Países que participaram de uma edição e não conquistaram medalhas foram mantidos na análise com `total = 0`. Essa distinção é importante, pois zero medalhas representa um resultado observado, enquanto a ausência de uma observação indicaria que o país não participou daquela edição.\n",
+    "\n",
+    "Para comparar as edições, foram calculadas medidas descritivas da distribuição do número de medalhas entre os países participantes: quantidade de países participantes, número de países medalhistas, total de medalhas da edição, média, mediana, terceiro quartil e maior número de medalhas obtido por um país.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Resumo do desempenho dos países por edição\n",
+    "resumo_edicoes = (\n",
+    "    df_olimpico_completo\n",
+    "    .groupby('year')\n",
+    "    .agg(\n",
+    "        participantes=('noc', 'nunique'),\n",
+    "        medalhistas=('total', lambda x: (x > 0).sum()),\n",
+    "        total_medalhas=('total', 'sum'),\n",
+    "        media_medalhas=('total', 'mean'),\n",
+    "        mediana_medalhas=('total', 'median'),\n",
+    "        q3_medalhas=('total', lambda x: x.quantile(0.75)),\n",
+    "        max_medalhas=('total', 'max')\n",
+    "    )\n",
+    "    .reset_index()\n",
+    ")\n",
+    "\n",
+    "resumo_edicoes\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Uma primeira visualização mostra como a quantidade de países participantes e de países que conquistaram ao menos uma medalha evoluiu ao longo das edições:\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import matplotlib.pyplot as plt\n",
+    "\n",
+    "plt.figure(figsize=(14, 6))\n",
+    "\n",
+    "plt.plot(\n",
+    "    resumo_edicoes['year'],\n",
+    "    resumo_edicoes['participantes'],\n",
+    "    marker='o',\n",
+    "    label='Países participantes'\n",
+    ")\n",
+    "\n",
+    "plt.plot(\n",
+    "    resumo_edicoes['year'],\n",
+    "    resumo_edicoes['medalhistas'],\n",
+    "    marker='o',\n",
+    "    label='Países medalhistas'\n",
+    ")\n",
+    "\n",
+    "plt.title('Participação e conquista de medalhas nos Jogos Olímpicos de Verão')\n",
+    "plt.xlabel('Ano da edição')\n",
+    "plt.ylabel('Número de países')\n",
+    "plt.legend()\n",
+    "plt.grid(axis='y', alpha=0.3)\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Para observar diretamente como o número de medalhas por país varia entre as edições, a análise é complementada com a evolução da média e da mediana:\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "plt.figure(figsize=(14, 6))\n",
+    "\n",
+    "plt.plot(\n",
+    "    resumo_edicoes['year'],\n",
+    "    resumo_edicoes['media_medalhas'],\n",
+    "    marker='o',\n",
+    "    label='Média'\n",
+    ")\n",
+    "\n",
+    "plt.plot(\n",
+    "    resumo_edicoes['year'],\n",
+    "    resumo_edicoes['mediana_medalhas'],\n",
+    "    marker='o',\n",
+    "    label='Mediana'\n",
+    ")\n",
+    "\n",
+    "plt.title('Medalhas por país participante ao longo das edições')\n",
+    "plt.xlabel('Ano da edição')\n",
+    "plt.ylabel('Número de medalhas')\n",
+    "plt.legend()\n",
+    "plt.grid(axis='y', alpha=0.3)\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta**\n",
+    "\n",
+    "Os dados mostram que o contexto competitivo dos Jogos Olímpicos mudou substancialmente ao longo do período analisado. Em 1896, a base registra **12 países participantes e 120 medalhas**, enquanto em 2024 aparecem **207 países participantes e 1.044 medalhas**. Portanto, tanto a quantidade de delegações quanto a quantidade de medalhas disponíveis aumentaram consideravelmente ao longo da história dos Jogos.\n",
+    "\n",
+    "Entretanto, o aumento do número total de medalhas não significou um aumento equivalente no número de medalhas conquistadas pelo país participante típico. Em 1896, a média era de **10 medalhas por país** e a mediana era de **6**. Em 2024, apesar de haver muito mais medalhas disponíveis, a média foi de aproximadamente **5 medalhas por país**, enquanto a mediana foi **zero**.\n",
+    "\n",
+    "A mediana igual a zero nas edições mais recentes significa que pelo menos metade dos países participantes terminou essas edições sem conquistar nenhuma medalha. Esse padrão aparece de forma persistente na base a partir de 1964. Ao mesmo tempo, existem países que conquistam dezenas ou até mais de uma centena de medalhas em uma única edição, fazendo com que a média seja consideravelmente superior à mediana.\n",
+    "\n",
+    "Também houve crescimento no número absoluto de países medalhistas. Em 1896, **10 dos 12 participantes** conquistaram pelo menos uma medalha. Em 2024, **92 dos 207 participantes** conquistaram medalhas. Assim, embora hoje muito mais países alcancem o pódio em números absolutos, o crescimento do número de participantes foi ainda maior.\n",
+    "\n",
+    "Portanto, **o desempenho olímpico dos países varia bastante entre as edições tanto em nível quanto em distribuição**. As primeiras edições possuíam poucos participantes e um número relativamente elevado de medalhas por país. Com a expansão dos Jogos, aumentaram simultaneamente o número de países e o total de medalhas, mas o número de medalhas do país típico diminuiu. Nas edições contemporâneas, muitos países terminam sem medalhas, enquanto alguns apresentam totais muito elevados.\n",
+    "\n",
+    "Essa diferença entre média e mediana também indica que a distribuição de medalhas é bastante assimétrica. A questão seguinte permitirá investigar mais diretamente até que ponto essas medalhas se concentram em um grupo reduzido de países.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 2. Como as medalhas estão distribuídas entre os países participantes? Elas se concentram em um grupo relativamente pequeno de países?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados**\n",
+    "\n",
+    "Para analisar a distribuição das medalhas entre os países participantes, foram consideradas todas as edições dos Jogos Olímpicos de Verão disponíveis na base, entre 1896 e 2024.\n",
+    "\n",
+    "Como a base abrange mais de um século de Jogos Olímpicos, alguns códigos representam delegações ou entidades históricas, como União Soviética e Alemanha Oriental. Por isso, nesta análise, os países são identificados pelos códigos dos Comitês Olímpicos Nacionais (NOCs) registrados na base.\n",
+    "\n",
+    "Primeiramente, foi calculado o total de medalhas conquistado por cada NOC ao longo de todo o período. Em seguida, os NOCs foram ordenados do maior para o menor número de medalhas e foram calculadas suas participações percentual e acumulada no total de medalhas.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Remove apenas observações sem código NOC identificável\n",
+    "df_q2 = df_olimpico_completo[\n",
+    "    df_olimpico_completo['noc'].notna()\n",
+    "].copy()\n",
+    "\n",
+    "# Total de medalhas de cada NOC em todas as edições\n",
+    "medalhas_por_noc = (\n",
+    "    df_q2\n",
+    "    .groupby('noc', as_index=False)\n",
+    "    .agg(total_medalhas=('total', 'sum'))\n",
+    "    .sort_values('total_medalhas', ascending=False)\n",
+    "    .reset_index(drop=True)\n",
+    ")\n",
+    "\n",
+    "# Participação de cada NOC no total de medalhas\n",
+    "total_medalhas_historico = medalhas_por_noc['total_medalhas'].sum()\n",
+    "\n",
+    "medalhas_por_noc['participacao_pct'] = (\n",
+    "    medalhas_por_noc['total_medalhas']\n",
+    "    / total_medalhas_historico\n",
+    "    * 100\n",
+    ")\n",
+    "\n",
+    "medalhas_por_noc['participacao_acumulada_pct'] = (\n",
+    "    medalhas_por_noc['participacao_pct'].cumsum()\n",
+    ")\n",
+    "\n",
+    "medalhas_por_noc['posicao'] = (\n",
+    "    medalhas_por_noc.index + 1\n",
+    ")\n",
+    "\n",
+    "medalhas_por_noc.head(20)\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "A concentração histórica das medalhas pode ser visualizada pela participação acumulada dos NOCs, ordenados do maior para o menor número de medalhas:\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import matplotlib.pyplot as plt\n",
+    "\n",
+    "plt.figure(figsize=(12, 6))\n",
+    "\n",
+    "plt.plot(\n",
+    "    medalhas_por_noc['posicao'],\n",
+    "    medalhas_por_noc['participacao_acumulada_pct'],\n",
+    "    linewidth=2\n",
+    ")\n",
+    "\n",
+    "plt.axhline(50, linestyle='--', alpha=0.6, label='50% das medalhas')\n",
+    "plt.axhline(80, linestyle='--', alpha=0.6, label='80% das medalhas')\n",
+    "plt.axhline(90, linestyle='--', alpha=0.6, label='90% das medalhas')\n",
+    "\n",
+    "plt.title('Concentração histórica das medalhas olímpicas de Verão')\n",
+    "plt.xlabel('NOCs ordenados pelo total de medalhas')\n",
+    "plt.ylabel('Percentual acumulado das medalhas (%)')\n",
+    "\n",
+    "plt.ylim(0, 100)\n",
+    "plt.grid(axis='y', alpha=0.3)\n",
+    "plt.legend()\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Como o número de participantes aumentou muito ao longo da história dos Jogos, também é útil verificar se essa concentração ocorre dentro de cada edição. Para isso, foi calculada a parcela das medalhas conquistada pelos dez NOCs com maior número de medalhas em cada edição.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Ordena os países dentro de cada edição\n",
+    "ranking_edicao = (\n",
+    "    df_q2\n",
+    "    .sort_values(\n",
+    "        ['year', 'total'],\n",
+    "        ascending=[True, False]\n",
+    "    )\n",
+    "    .copy()\n",
+    ")\n",
+    "\n",
+    "# Posição do país dentro da edição\n",
+    "ranking_edicao['posicao_edicao'] = (\n",
+    "    ranking_edicao\n",
+    "    .groupby('year')\n",
+    "    .cumcount() + 1\n",
+    ")\n",
+    "\n",
+    "# Total de medalhas distribuídas em cada edição\n",
+    "ranking_edicao['total_edicao'] = (\n",
+    "    ranking_edicao\n",
+    "    .groupby('year')['total']\n",
+    "    .transform('sum')\n",
+    ")\n",
+    "\n",
+    "# Participação percentual de cada país\n",
+    "ranking_edicao['participacao_pct'] = (\n",
+    "    ranking_edicao['total']\n",
+    "    / ranking_edicao['total_edicao']\n",
+    "    * 100\n",
+    ")\n",
+    "\n",
+    "# Participação conjunta dos 10 primeiros de cada edição\n",
+    "concentracao_top10 = (\n",
+    "    ranking_edicao[\n",
+    "        ranking_edicao['posicao_edicao'] <= 10\n",
+    "    ]\n",
+    "    .groupby('year', as_index=False)\n",
+    "    .agg(\n",
+    "        participacao_top10=('participacao_pct', 'sum')\n",
+    "    )\n",
+    ")\n",
+    "\n",
+    "concentracao_top10\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "plt.figure(figsize=(14, 6))\n",
+    "\n",
+    "plt.plot(\n",
+    "    concentracao_top10['year'],\n",
+    "    concentracao_top10['participacao_top10'],\n",
+    "    marker='o'\n",
+    ")\n",
+    "\n",
+    "plt.title('Participação dos 10 países com mais medalhas em cada edição')\n",
+    "plt.xlabel('Ano da edição')\n",
+    "plt.ylabel('Percentual das medalhas da edição (%)')\n",
+    "\n",
+    "plt.grid(axis='y', alpha=0.3)\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta**\n",
+    "\n",
+    "A distribuição histórica das medalhas apresenta forte concentração. Ao longo das edições de Verão analisadas, aparecem **233 NOCs diferentes**, dos quais **156 conquistaram pelo menos uma medalha** e **77 nunca conquistaram medalhas** no período registrado na base.\n",
+    "\n",
+    "No total, foram contabilizadas **18.185 medalhas**. Entretanto, essas medalhas estão distribuídas de maneira bastante desigual. Apenas os **9 NOCs com mais medalhas acumuladas concentram pouco mais de 50% de todas as medalhas** do período. Considerando os dez primeiros, essa participação chega a aproximadamente **53,1%**.\n",
+    "\n",
+    "A concentração continua evidente quando ampliamos o grupo: os **20 NOCs com mais medalhas acumulam aproximadamente 73,3%** de todas as medalhas, enquanto apenas **40 NOCs concentram cerca de 90,1%** do total histórico. Portanto, uma parcela relativamente pequena das delegações é responsável pela maior parte das medalhas distribuídas ao longo dos Jogos.\n",
+    "\n",
+    "Esse resultado histórico, entretanto, deve ser interpretado com cuidado. Países que participaram de muitas edições tiveram mais oportunidades de acumular medalhas, e a base contém também delegações históricas que não existem mais na mesma forma, como a União Soviética e a Alemanha Oriental. Por isso, o total acumulado não deve ser interpretado simplesmente como um ranking atual de desempenho.\n",
+    "\n",
+    "A análise por edição confirma, porém, que a concentração não é apenas consequência do acúmulo histórico. Nas edições mais recentes, os dez países com maior número de medalhas continuam concentrando mais da metade das medalhas disponíveis. Em 2000, os dez primeiros receberam aproximadamente **55,1%** das medalhas; em 2008, **56,6%**; em 2016, **53,3%**; e em 2024, **55,8%**.\n",
+    "\n",
+    "Em 2024, por exemplo, havia **207 NOCs participantes**, mas apenas **92 conquistaram ao menos uma medalha**, enquanto **115 terminaram a edição sem medalhas**. Além disso, os vinte países com maior desempenho concentraram aproximadamente **71,5%** de todas as medalhas daquela edição.\n",
+    "\n",
+    "Assim, os dados indicam que **as medalhas olímpicas estão fortemente concentradas em um grupo relativamente pequeno de países**. Essa concentração era ainda mais extrema nas primeiras edições, quando o número de participantes era menor, e diminuiu com a expansão dos Jogos. Mesmo assim, permanece elevada nas edições contemporâneas: mais de metade das medalhas continua sendo conquistada pelos dez países de maior desempenho de cada edição.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 3. Países com populações maiores tendem a conquistar mais medalhas?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados**\n",
+    "\n",
+    "Como esta pergunta envolve um indicador socioeconômico, foram consideradas apenas as edições dos Jogos Olímpicos de Verão entre **1960 e 2024**, período de sobreposição com os dados de população do World Bank.\n",
+    "\n",
+    "A unidade de análise continua sendo **país × edição olímpica**. Países que participaram de uma edição e não conquistaram medalhas permanecem na base com `total = 0`. Para esta pergunta, são excluídas apenas as observações que não possuem informação de população.\n",
+    "\n",
+    "A população apresenta valores muito diferentes entre os países, variando por várias ordens de grandeza. Por isso, o gráfico de dispersão utiliza escala logarítmica no eixo da população. Além da inspeção visual, é calculada a correlação de Spearman, que mede a associação monotônica entre duas variáveis por meio de suas posições no ranking e é menos sensível que a correlação de Pearson à forte assimetria da população e a valores extremos.\n",
+    "\n",
+    "Como a população mundial também cresceu ao longo do período, a análise é complementada agrupando os países em **quartis de população dentro de cada edição**. Dessa forma, a comparação é feita entre países relativamente menores e maiores no contexto de cada Olimpíada, evitando comparar diretamente o tamanho populacional absoluto de 1960 com o de 2024.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Seleciona apenas observações com população disponível\n",
+    "df_q3 = (\n",
+    "    df_socioeconomico\n",
+    "    .dropna(subset=['population'])\n",
+    "    .copy()\n",
+    ")\n",
+    "\n",
+    "observacoes_totais_q3 = len(df_socioeconomico)\n",
+    "observacoes_validas_q3 = len(df_q3)\n",
+    "ausentes_populacao = df_socioeconomico['population'].isna().sum()\n",
+    "\n",
+    "print(f'Observações no recorte 1960–2024: {observacoes_totais_q3}')\n",
+    "print(f'Observações com população disponível: {observacoes_validas_q3}')\n",
+    "print(f'Observações sem população: {ausentes_populacao}')\n",
+    "\n",
+    "# Correlação de Spearman entre população e total de medalhas\n",
+    "correlacao_spearman_pop = (\n",
+    "    df_q3[['population', 'total']]\n",
+    "    .corr(method='spearman')\n",
+    "    .loc['population', 'total']\n",
+    ")\n",
+    "\n",
+    "print(f'Correlação de Spearman: {correlacao_spearman_pop:.3f}')\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "O gráfico de dispersão abaixo mostra a relação entre população e número de medalhas para cada observação país × edição. A escala logarítmica no eixo horizontal é utilizada porque existem diferenças de várias ordens de grandeza entre as populações dos países.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import matplotlib.pyplot as plt\n",
+    "\n",
+    "plt.figure(figsize=(12, 7))\n",
+    "\n",
+    "plt.scatter(\n",
+    "    df_q3['population'],\n",
+    "    df_q3['total'],\n",
+    "    alpha=0.35,\n",
+    "    s=30\n",
+    ")\n",
+    "\n",
+    "plt.xscale('log')\n",
+    "\n",
+    "plt.title('População e número de medalhas nos Jogos Olímpicos de Verão (1960–2024)')\n",
+    "plt.xlabel('População do país — escala logarítmica')\n",
+    "plt.ylabel('Número total de medalhas na edição')\n",
+    "\n",
+    "plt.grid(alpha=0.25)\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Para complementar o gráfico de dispersão, os países foram divididos em quatro grupos de tamanho populacional **dentro de cada edição**. O primeiro quartil reúne os países relativamente menos populosos daquela edição, enquanto o quarto quartil reúne os relativamente mais populosos.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Cria quartis de população separadamente em cada edição\n",
+    "# O rank(method='first') evita problemas de corte quando existem valores empatados.\n",
+    "rotulos_quartis = [\n",
+    "    'Q1 - menor população',\n",
+    "    'Q2',\n",
+    "    'Q3',\n",
+    "    'Q4 - maior população'\n",
+    "]\n",
+    "\n",
+    "df_q3['quartil_populacao'] = (\n",
+    "    df_q3\n",
+    "    .groupby('year')['population']\n",
+    "    .transform(\n",
+    "        lambda x: pd.qcut(\n",
+    "            x.rank(method='first'),\n",
+    "            q=4,\n",
+    "            labels=rotulos_quartis\n",
+    "        )\n",
+    "    )\n",
+    ")\n",
+    "\n",
+    "# Resume o desempenho em cada quartil\n",
+    "resumo_quartis_pop = (\n",
+    "    df_q3\n",
+    "    .groupby('quartil_populacao', observed=False)\n",
+    "    .agg(\n",
+    "        observacoes=('total', 'size'),\n",
+    "        media_medalhas=('total', 'mean'),\n",
+    "        mediana_medalhas=('total', 'median'),\n",
+    "        proporcao_medalhistas=(\n",
+    "            'total',\n",
+    "            lambda x: (x > 0).mean() * 100\n",
+    "        )\n",
+    "    )\n",
+    "    .reset_index()\n",
+    ")\n",
+    "\n",
+    "resumo_quartis_pop\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "plt.figure(figsize=(10, 6))\n",
+    "\n",
+    "plt.bar(\n",
+    "    resumo_quartis_pop['quartil_populacao'].astype(str),\n",
+    "    resumo_quartis_pop['media_medalhas']\n",
+    ")\n",
+    "\n",
+    "plt.title('Média de medalhas por quartil de população')\n",
+    "plt.xlabel('Quartil de população dentro de cada edição')\n",
+    "plt.ylabel('Média de medalhas')\n",
+    "\n",
+    "plt.xticks(rotation=15)\n",
+    "plt.grid(axis='y', alpha=0.25)\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta**\n",
+    "\n",
+    "No recorte de 1960 a 2024, a base contém **2.679 observações país × edição**, das quais **2.584 possuem informação de população** e podem ser utilizadas nesta análise. As 95 observações restantes foram mantidas como ausentes na base geral e são excluídas apenas desta pergunta. Entre elas estão algumas delegações históricas, como União Soviética e Alemanha Oriental, para as quais não existe uma correspondência direta e defensável com os países atuais do World Bank. Essa ausência deve ser considerada uma limitação da análise.\n",
+    "\n",
+    "O gráfico de dispersão sugere uma **associação positiva entre população e número de medalhas**: observações correspondentes a países mais populosos aparecem com maior frequência entre os maiores totais de medalhas. Entretanto, existe grande dispersão. Há países muito populosos que conquistam poucas ou nenhuma medalha e, ao mesmo tempo, países de população bem menor que apresentam resultados relativamente elevados.\n",
+    "\n",
+    "A correlação de Spearman entre população e total de medalhas é de aproximadamente **0,48**. O valor positivo confirma a tendência observada no gráfico: à medida que a população aumenta, o número de medalhas tende também a ocupar posições mais altas. No entanto, a relação está longe de ser perfeita, mostrando que o tamanho da população, isoladamente, não determina o desempenho olímpico.\n",
+    "\n",
+    "A comparação por quartis reforça esse padrão. Dentro de cada edição, os países pertencentes ao **quartil de menor população (Q1)** conquistaram, em média, aproximadamente **0,14 medalha por participação**, e apenas cerca de **9,3%** dessas observações correspondem a países que conquistaram pelo menos uma medalha. No segundo quartil, a média sobe para aproximadamente **1,54 medalha**, e no terceiro, para **3,86 medalhas**.\n",
+    "\n",
+    "No **quartil de maior população (Q4)**, a média alcança aproximadamente **12,28 medalhas por participação**, e cerca de **69,3%** das observações correspondem a países medalhistas. A mediana desse grupo é de **3 medalhas**, enquanto a mediana dos três primeiros quartis é zero.\n",
+    "\n",
+    "Portanto, **os dados indicam que países com populações maiores tendem a conquistar mais medalhas olímpicas**. A associação aparece tanto no gráfico de dispersão quanto na comparação entre grupos de população. Contudo, a ampla variabilidade dentro de cada faixa populacional mostra que população não é suficiente para explicar o desempenho: países de tamanhos semelhantes podem apresentar resultados olímpicos muito diferentes.\n",
+    "\n",
+    "Além disso, essa análise identifica apenas uma associação. Não é possível concluir que uma população maior cause diretamente um melhor desempenho olímpico. Outros fatores, inclusive econômicos, podem estar relacionados ao resultado, o que será explorado nas perguntas seguintes.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 4. Existe associação entre o PIB de um país e seu número de medalhas conquistadas?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados**\n",
+    "\n",
+    "Como esta pergunta utiliza o PIB, foram consideradas apenas as edições dos Jogos Olímpicos de Verão entre **1960 e 2024**, período de sobreposição com os dados do World Bank.\n",
+    "\n",
+    "A unidade de análise permanece sendo **país × edição olímpica**, e países participantes que não conquistaram medalhas continuam representados com `total = 0`. Para esta pergunta, são excluídas somente as observações sem informação de PIB.\n",
+    "\n",
+    "O indicador utilizado é o PIB em **dólares correntes** (`NY.GDP.MKTP.CD`). Como valores monetários correntes de anos muito distantes não são diretamente comparáveis devido, entre outros fatores, à inflação e a variações cambiais, a análise não se baseará apenas nos valores absolutos combinados ao longo de todo o período.\n",
+    "\n",
+    "O gráfico de dispersão utiliza escala logarítmica no eixo do PIB para representar adequadamente países cujas economias diferem por várias ordens de grandeza. Para a medida de associação principal, cada país recebe também sua **posição percentual de PIB dentro da própria edição olímpica**. Assim, comparamos se países relativamente maiores economicamente em cada edição tendem a conquistar mais medalhas, sem depender da comparação direta entre dólares de 1960 e dólares de 2024.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Seleciona somente observações com PIB disponível\n",
+    "df_q4 = (\n",
+    "    df_socioeconomico\n",
+    "    .dropna(subset=['gdp'])\n",
+    "    .copy()\n",
+    ")\n",
+    "\n",
+    "observacoes_totais_q4 = len(df_socioeconomico)\n",
+    "observacoes_validas_q4 = len(df_q4)\n",
+    "ausentes_gdp = df_socioeconomico['gdp'].isna().sum()\n",
+    "\n",
+    "print(f'Observações no recorte 1960–2024: {observacoes_totais_q4}')\n",
+    "print(f'Observações com PIB disponível: {observacoes_validas_q4}')\n",
+    "print(f'Observações sem PIB: {ausentes_gdp}')\n",
+    "\n",
+    "# Posição percentual do PIB dentro de cada edição.\n",
+    "# Valores próximos de 1 representam os maiores PIBs daquela edição.\n",
+    "df_q4['percentil_gdp_edicao'] = (\n",
+    "    df_q4\n",
+    "    .groupby('year')['gdp']\n",
+    "    .rank(method='average', pct=True)\n",
+    ")\n",
+    "\n",
+    "# Correlação de Spearman entre posição relativa do PIB e medalhas\n",
+    "correlacao_spearman_gdp = (\n",
+    "    df_q4[['percentil_gdp_edicao', 'total']]\n",
+    "    .corr(method='spearman')\n",
+    "    .loc['percentil_gdp_edicao', 'total']\n",
+    ")\n",
+    "\n",
+    "print(\n",
+    "    'Correlação de Spearman entre posição relativa do PIB '\n",
+    "    f'e medalhas: {correlacao_spearman_gdp:.3f}'\n",
+    ")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "O gráfico abaixo mostra a relação entre o PIB e o número de medalhas nas observações país × edição. A escala logarítmica no eixo horizontal é necessária porque os PIBs apresentam diferenças de várias ordens de grandeza. Como o PIB está expresso em dólares correntes, o gráfico deve ser interpretado principalmente como uma visualização exploratória da associação, e não como uma comparação direta de níveis monetários entre décadas.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import matplotlib.pyplot as plt\n",
+    "\n",
+    "plt.figure(figsize=(12, 7))\n",
+    "\n",
+    "plt.scatter(\n",
+    "    df_q4['gdp'],\n",
+    "    df_q4['total'],\n",
+    "    alpha=0.35,\n",
+    "    s=30\n",
+    ")\n",
+    "\n",
+    "plt.xscale('log')\n",
+    "\n",
+    "plt.title('PIB e número de medalhas nos Jogos Olímpicos de Verão (1960–2024)')\n",
+    "plt.xlabel('PIB em US$ correntes — escala logarítmica')\n",
+    "plt.ylabel('Número total de medalhas na edição')\n",
+    "\n",
+    "plt.grid(alpha=0.25)\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Para tornar a comparação entre diferentes edições mais adequada, os países foram divididos em **quartis de PIB dentro de cada edição**. O primeiro quartil reúne os países com os menores PIBs relativos daquela edição e o quarto quartil reúne os maiores. Em seguida, são comparados o número médio e mediano de medalhas e a proporção de países que conquistaram pelo menos uma medalha.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Quartis de PIB calculados separadamente em cada edição\n",
+    "rotulos_quartis_gdp = [\n",
+    "    'Q1 - menor PIB',\n",
+    "    'Q2',\n",
+    "    'Q3',\n",
+    "    'Q4 - maior PIB'\n",
+    "]\n",
+    "\n",
+    "df_q4['quartil_gdp'] = (\n",
+    "    df_q4\n",
+    "    .groupby('year')['gdp']\n",
+    "    .transform(\n",
+    "        lambda x: pd.qcut(\n",
+    "            x.rank(method='first'),\n",
+    "            q=4,\n",
+    "            labels=rotulos_quartis_gdp\n",
+    "        )\n",
+    "    )\n",
+    ")\n",
+    "\n",
+    "resumo_quartis_gdp = (\n",
+    "    df_q4\n",
+    "    .groupby('quartil_gdp', observed=False)\n",
+    "    .agg(\n",
+    "        observacoes=('total', 'size'),\n",
+    "        media_medalhas=('total', 'mean'),\n",
+    "        mediana_medalhas=('total', 'median'),\n",
+    "        proporcao_medalhistas=(\n",
+    "            'total',\n",
+    "            lambda x: (x > 0).mean() * 100\n",
+    "        )\n",
+    "    )\n",
+    "    .reset_index()\n",
+    ")\n",
+    "\n",
+    "resumo_quartis_gdp\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "plt.figure(figsize=(10, 6))\n",
+    "\n",
+    "plt.bar(\n",
+    "    resumo_quartis_gdp['quartil_gdp'].astype(str),\n",
+    "    resumo_quartis_gdp['media_medalhas']\n",
+    ")\n",
+    "\n",
+    "plt.title('Média de medalhas por quartil de PIB')\n",
+    "plt.xlabel('Quartil de PIB dentro de cada edição')\n",
+    "plt.ylabel('Média de medalhas')\n",
+    "\n",
+    "plt.xticks(rotation=15)\n",
+    "plt.grid(axis='y', alpha=0.25)\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta**\n",
+    "\n",
+    "No período de 1960 a 2024, a base possui **2.679 observações país × edição**. Destas, **2.447 possuem informação de PIB** e são utilizadas nesta pergunta; **232 observações não possuem o indicador** e são excluídas apenas desta análise.\n",
+    "\n",
+    "O gráfico de dispersão apresenta um padrão de associação positiva: os maiores totais de medalhas aparecem com maior frequência entre países de PIB elevado. Ao mesmo tempo, a dispersão é considerável, pois países com níveis econômicos semelhantes podem apresentar números de medalhas bastante diferentes.\n",
+    "\n",
+    "Para evitar que a comparação entre valores de PIB em dólares correntes de décadas diferentes distorça a interpretação, foi calculada a posição relativa do PIB de cada país dentro de sua própria edição olímpica. A correlação de Spearman entre essa posição relativa e o total de medalhas é de aproximadamente **0,67**, indicando uma associação positiva relativamente clara: países que ocupam posições mais altas na distribuição de PIB de uma edição tendem também a ocupar posições mais altas em número de medalhas.\n",
+    "\n",
+    "A comparação por quartis reforça esse resultado. Entre os países do **quartil de menor PIB (Q1)**, a média é de aproximadamente **0,11 medalha por participação**, e apenas cerca de **7,3%** das observações correspondem a países que conquistaram pelo menos uma medalha. No segundo quartil, a média sobe para cerca de **0,58 medalha**, e no terceiro quartil chega a aproximadamente **3,10 medalhas**.\n",
+    "\n",
+    "No **quartil de maior PIB (Q4)**, a média alcança aproximadamente **14,18 medalhas por participação**. Além disso, cerca de **86,9%** das observações desse grupo correspondem a países medalhistas, e a mediana é de **5 medalhas**. Nos três primeiros quartis, a mediana é zero.\n",
+    "\n",
+    "Portanto, **os dados mostram uma associação positiva entre PIB total e desempenho olímpico medido pelo número de medalhas**. Países com economias relativamente maiores dentro de cada edição tendem a conquistar mais medalhas e apresentam uma probabilidade muito maior de conquistar ao menos uma.\n",
+    "\n",
+    "Essa associação, entretanto, não implica causalidade. O PIB total também está relacionado ao tamanho da população e não informa como a riqueza está distribuída entre os habitantes nem quanto um país efetivamente investe em esporte. Assim, não é possível concluir que um PIB maior, por si só, cause um melhor desempenho olímpico. A próxima pergunta, ao utilizar o PIB per capita, permite investigar se a relação se mantém quando o tamanho da economia é considerado de uma forma diferente.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 5. A relação observada muda quando utilizamos PIB per capita em vez de PIB total?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados:**\n",
+    "\n",
+    "*(Documente aqui as agregações, derivações e limpezas feitas especificamente para responder a esta pergunta. Por exemplo, agrupar medalhas por equipe, ou derivar medalhas/milhão de habitantes)*"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Código para transformação de dados e geração do gráfico para a 5ª Pergunta\n",
+    "# ...\n",
+    "# plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta:**\n",
+    "\n",
+    "*(Interprete o gráfico gerado acima e responda diretamente à pergunta, lembrando de discutir em termos de associação e não causalidade.)*"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 6. Como a comparação entre os países muda quando utilizamos medidas relativas, como medalhas por milhão de habitantes, em vez do número absoluto de medalhas?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados:**\n",
+    "\n",
+    "*(Documente aqui as agregações, derivações e limpezas feitas especificamente para responder a esta pergunta. Por exemplo, agrupar medalhas por equipe, ou derivar medalhas/milhão de habitantes)*"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Código para transformação de dados e geração do gráfico para a 6ª Pergunta\n",
+    "# ...\n",
+    "# plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta:**\n",
+    "\n",
+    "*(Interprete o gráfico gerado acima e responda diretamente à pergunta, lembrando de discutir em termos de associação e não causalidade.)*"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 7. Quais países apresentam desempenho olímpico muito acima ou abaixo do padrão observado para países com características socioeconômicas semelhantes?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados:**\n",
+    "\n",
+    "*(Documente aqui as agregações, derivações e limpezas feitas especificamente para responder a esta pergunta. Por exemplo, agrupar medalhas por equipe, ou derivar medalhas/milhão de habitantes)*"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Código para transformação de dados e geração do gráfico para a 7ª Pergunta\n",
+    "# ...\n",
+    "# plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta:**\n",
+    "\n",
+    "*(Interprete o gráfico gerado acima e responda diretamente à pergunta, lembrando de discutir em termos de associação e não causalidade.)*"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 8. Essas relações entre características socioeconômicas e desempenho olímpico permanecem semelhantes ao longo das diferentes edições dos Jogos?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Transformação dos Dados:**\n",
+    "\n",
+    "*(Documente aqui as agregações, derivações e limpezas feitas especificamente para responder a esta pergunta. Por exemplo, agrupar medalhas por equipe, ou derivar medalhas/milhão de habitantes)*"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Código para transformação de dados e geração do gráfico para a 8ª Pergunta\n",
+    "# ...\n",
+    "# plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "**Análise e Resposta:**\n",
+    "\n",
+    "*(Interprete o gráfico gerado acima e responda diretamente à pergunta, lembrando de discutir em termos de associação e não causalidade.)*"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Conclusão\n",
+    "\n",
+    "*(Escreva a síntese final do trabalho, as recomendações e as limitações encontradas na análise, como por exemplo, problemas de padronização ao unir a base esportiva à do Banco Mundial.)*"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.14.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
